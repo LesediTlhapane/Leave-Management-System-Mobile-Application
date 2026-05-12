@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "37136616791",
-    "project_id": "wil-setup",
-    "storage_bucket": "wil-setup.firebasestorage.app"
+    "project_number": "1055192434275",
+    "project_id": "leave-management-system-2fd8d",
+    "storage_bucket": "leave-management-system-2fd8d.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:37136616791:android:e95cdfbe92c2916041c212",
+        "mobilesdk_app_id": "1:1055192434275:android:2715f36f40f719fba0da56",
         "android_client_info": {
           "package_name": "com.example.wil"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCMF3IZn3irv73SadeA5OcK25uGAOWIDf0"
+          "current_key": "AIzaSyCX-hG_91x3-zixv_HtfhhOj8ePT49WQPk"
         }
       ],
       "services": {

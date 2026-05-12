@@ -1,228 +1,252 @@
 // lib/fire_backend.dart
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-/// (Optional, safe to call multiple times) — disable local persistence on web
-void _configureDb() {
-  try {
-    _db.settings = const Settings(persistenceEnabled: false);
-  } catch (_) {}
-}
+/* =========================
+ *  CREATE LEAVE REQUEST
+ * ========================= */
 
-/// Creates a doc in `leave_requests` and returns its id.
 Future<String> createLeaveRequest({
   required String employeeId,
   required String employeeName,
   required String department,
   required String leaveType,
   required int totalDays,
-  required String startDateIso,  // machine-friendly
-  required String endDateIso,    // machine-friendly
-  required String startDateText, // your DD/MM/YYYY text
-  required String endDateText,   // your DD/MM/YYYY text
+  required String startDateIso,
+  required String endDateIso,
+  required String startDateText,
+  required String endDateText,
   required String reason,
-
-  // NEW: optional supporting document fields
   String? attachmentUrl,
   String? attachmentName,
 }) async {
-  _configureDb();
+  try {
+    final payload = <String, dynamic>{
+      'employeeId': employeeId.toString(),
+      'employeeName': employeeName.toString(),
+      'department': department.toString(),
+      'leaveType': leaveType.toString(),
+      'totalDays': totalDays,
+      'startDateIso': startDateIso.toString(),
+      'endDateIso': endDateIso.toString(),
+      'startDateText': startDateText.toString(),
+      'endDateText': endDateText.toString(),
+      'reason': reason.toString(),
 
-  final payload = <String, dynamic>{
-    'employeeId': employeeId,
-    'employeeName': employeeName,
-    'department': department,
-    'leaveType': leaveType,
-    'totalDays': totalDays,
-    'startDateIso': startDateIso,
-    'endDateIso': endDateIso,
-    'startDateText': startDateText,
-    'endDateText': endDateText,
-    'reason': reason,
-    'status': 'pending',
-    'createdAt': FieldValue.serverTimestamp(),
-    'source': 'flutter',
+      'status': 'pending',
 
-    // NEW: write only when provided
-    if (attachmentUrl != null) 'attachmentUrl': attachmentUrl,
-    if (attachmentName != null) 'attachmentName': attachmentName,
-  };
+      // IMPORTANT FIX
+      'createdAt': Timestamp.now(),
 
-  final ref = await _db.collection('leave_requests').add(payload);
-  return ref.id;
+      'source': 'flutter',
+
+      if (attachmentUrl != null)
+        'attachmentUrl': attachmentUrl,
+
+      if (attachmentName != null)
+        'attachmentName': attachmentName,
+    };
+
+    print('WRITING TO FIRESTORE...');
+    print(payload);
+
+    final ref = await _db
+        .collection('leave_requests')
+        .add(payload);
+
+    print('SUCCESSFULLY CREATED DOCUMENT');
+    print(ref.id);
+
+    return ref.id;
+
+  } catch (e) {
+    print('CREATE LEAVE REQUEST ERROR');
+    print(e);
+
+    rethrow;
+  }
 }
 
 /* =========================
- *  STATUS & NOTIFICATIONS
+ *  STATUS UPDATE
  * ========================= */
 
-/// Update status of an existing leave request: 'pending' | 'approved' | 'rejected' | 'cancelled'
 Future<void> updateLeaveStatus({
   required String docId,
   required String status,
   String? feedback,
 }) async {
-  _configureDb();
+  try {
+    await _db
+        .collection('leave_requests')
+        .doc(docId)
+        .update({
+      'status': status,
+      'feedback': feedback ?? '',
+      'decidedAt': Timestamp.now(),
+    });
 
-  final patch = <String, dynamic>{
-    'status': status,
-    'feedback': feedback,
-    'decidedAt': FieldValue.serverTimestamp(),
-  };
+    print('STATUS UPDATED');
 
-  await _db.collection('leave_requests').doc(docId).update(patch);
+  } catch (e) {
+    print('UPDATE STATUS ERROR');
+    print(e);
+  }
 }
 
-/// Write a basic notification to `notifications`
+/* =========================
+ *  NOTIFICATIONS
+ * ========================= */
+
 Future<void> _addNotification({
   required String employeeId,
   required String title,
   required String message,
   String? status,
 }) async {
-  await _db.collection('notifications').add({
-    'employeeId': employeeId,
-    'title': title,
-    'message': message,
-    'status': status,
-    'createdAt': FieldValue.serverTimestamp(),
-    'source': 'flutter',
-  });
+  try {
+    await _db
+        .collection('notifications')
+        .add({
+      'employeeId': employeeId,
+      'title': title,
+      'message': message,
+      'status': status ?? '',
+      'createdAt': Timestamp.now(),
+      'source': 'flutter',
+    });
+
+    print('NOTIFICATION ADDED');
+
+  } catch (e) {
+    print('NOTIFICATION ERROR');
+    print(e);
+  }
 }
 
 /* =========================
- *  BALANCES (TRANSACTIONS)
+ *  BALANCE DEDUCTION
  * ========================= */
 
-/// Decrement remaining by [days] (non-negative) for a specific leave type.
 Future<void> deductFromBalance({
   required String employeeId,
   required String leaveType,
   required int days,
 }) async {
-  assert(days >= 0);
-  final empRef = _db.collection('leave_balances').doc(employeeId);
+  try {
+    final empRef =
+        _db.collection('leave_balances').doc(employeeId);
 
-  await _db.runTransaction((tx) async {
-    final snap = await tx.get(empRef);
-    final data = (snap.exists ? snap.data() : {}) as Map<String, dynamic>;
+    await _db.runTransaction((tx) async {
+      final snap = await tx.get(empRef);
 
-    final key = leaveType;
-    final rec = Map<String, dynamic>.from(data[key] ?? {});
-    final remaining = (rec['remaining'] is num) ? (rec['remaining'] as num).toInt() : 0;
+      final data =
+          (snap.exists ? snap.data() : {}) as Map<String, dynamic>;
 
-    rec['remaining'] = (remaining - days) < 0 ? 0 : (remaining - days);
-    data[key] = rec;
+      final key = leaveType;
 
-    tx.set(empRef, data, SetOptions(merge: true));
-  });
+      final rec =
+          Map<String, dynamic>.from(data[key] ?? {});
+
+      final remaining =
+          (rec['remaining'] is num)
+              ? (rec['remaining'] as num).toInt()
+              : 0;
+
+      rec['remaining'] =
+          (remaining - days) < 0
+              ? 0
+              : (remaining - days);
+
+      data[key] = rec;
+
+      tx.set(
+        empRef,
+        data,
+        SetOptions(merge: true),
+      );
+    });
+
+    print('BALANCE DEDUCTED');
+
+  } catch (e) {
+    print('BALANCE DEDUCTION ERROR');
+    print(e);
+  }
 }
 
-/// Increment remaining by [days] for a specific leave type.
+/* =========================
+ *  BALANCE REFUND
+ * ========================= */
+
 Future<void> refundToBalance({
   required String employeeId,
   required String leaveType,
   required int days,
 }) async {
-  assert(days >= 0);
-  final empRef = _db.collection('leave_balances').doc(employeeId);
+  try {
+    final empRef =
+        _db.collection('leave_balances').doc(employeeId);
 
-  await _db.runTransaction((tx) async {
-    final snap = await tx.get(empRef);
-    final data = (snap.exists ? snap.data() : {}) as Map<String, dynamic>;
+    await _db.runTransaction((tx) async {
+      final snap = await tx.get(empRef);
 
-    final key = leaveType;
-    final rec = Map<String, dynamic>.from(data[key] ?? {});
-    final remaining = (rec['remaining'] is num) ? (rec['remaining'] as num).toInt() : 0;
+      final data =
+          (snap.exists ? snap.data() : {}) as Map<String, dynamic>;
 
-    rec['remaining'] = remaining + days;
-    data[key] = rec;
+      final key = leaveType;
 
-    tx.set(empRef, data, SetOptions(merge: true));
-  });
-}
+      final rec =
+          Map<String, dynamic>.from(data[key] ?? {});
 
-/* =========================
- *  APPROVE / REJECT / PENDING
- * ========================= */
+      final remaining =
+          (rec['remaining'] is num)
+              ? (rec['remaining'] as num).toInt()
+              : 0;
 
-/// Approve + deduct balance + notify.
-Future<void> approveRequest({
-  required String docId,
-  required String employeeId,
-  required String employeeName,
-  required String leaveType,
-  required int totalDays,
-  required String startDateText,
-  required String endDateText,
-  String? feedback,
-}) async {
-  // 1) status
-  await updateLeaveStatus(docId: docId, status: 'approved', feedback: feedback);
+      rec['remaining'] = remaining + days;
 
-  // 2) deduct balance
-  if (totalDays > 0) {
-    await deductFromBalance(
-      employeeId: employeeId,
-      leaveType: leaveType,
-      days: totalDays,
-    );
+      data[key] = rec;
+
+      tx.set(
+        empRef,
+        data,
+        SetOptions(merge: true),
+      );
+    });
+
+    print('BALANCE REFUNDED');
+
+  } catch (e) {
+    print('BALANCE REFUND ERROR');
+    print(e);
   }
-
-  // 3) notify
-  await _addNotification(
-    employeeId: employeeId,
-    title: 'Leave Approved',
-    message:
-        '$leaveType $startDateText–$endDateText ($totalDays day${totalDays == 1 ? '' : 's'})',
-    status: 'approved',
-  );
 }
+/* =========================
+ *  DELETE REQUEST
+ * ========================= */
 
-/// Reject + notify (no balance change).
-Future<void> rejectRequest({
-  required String docId,
-  required String employeeId,
-  required String leaveType,
-  required int totalDays,
-  required String startDateText,
-  required String endDateText,
-  String? feedback,
-}) async {
-  await updateLeaveStatus(docId: docId, status: 'rejected', feedback: feedback);
+Future<void> deleteLeaveRequest(String docId) async {
+  try {
+    await _db
+        .collection('leave_requests')
+        .doc(docId)
+        .delete();
 
-  await _addNotification(
-    employeeId: employeeId,
-    title: 'Leave Rejected',
-    message:
-        '$leaveType $startDateText–$endDateText ($totalDays day${totalDays == 1 ? '' : 's'})',
-    status: 'rejected',
-  );
-}
+    print('REQUEST DELETED');
 
-/// Set back to pending (no balance change).
-Future<void> markPending({
-  required String docId,
-  String? feedback,
-}) async {
-  await updateLeaveStatus(docId: docId, status: 'pending', feedback: feedback);
+  } catch (e) {
+    print('DELETE ERROR');
+    print(e);
+  }
 }
 
 /* =========================
- *  CANCEL / DELETE
+ *  CANCEL REQUEST
  * ========================= */
 
-/// Delete from Firestore (used when the employee cancels). The website
-/// `onSnapshot` will remove it automatically from the table.
-Future<void> deleteLeaveRequest(String docId) async {
-  await _db.collection('leave_requests').doc(docId).delete();
-}
-
-/// Cancel from the app:
-///  - refunds balance
-///  - (option A) delete document so website row disappears
-///  - (option B) or mark as 'cancelled' if you prefer to keep history
 Future<void> cancelRequestAndRefund({
   required String docId,
   required String employeeId,
@@ -230,30 +254,43 @@ Future<void> cancelRequestAndRefund({
   required int totalDays,
   required String startDateText,
   required String endDateText,
-  bool deleteDoc = true, // true = remove from website table immediately
+  bool deleteDoc = true,
 }) async {
-  // 1) refund
-  if (totalDays > 0) {
-    await refundToBalance(
+  try {
+
+    // REFUND BALANCE
+    if (totalDays > 0) {
+      await refundToBalance(
+        employeeId: employeeId,
+        leaveType: leaveType,
+        days: totalDays,
+      );
+    }
+
+    // DELETE OR MARK CANCELLED
+    if (deleteDoc) {
+      await deleteLeaveRequest(docId);
+    } else {
+      await updateLeaveStatus(
+        docId: docId,
+        status: 'cancelled',
+      );
+    }
+
+    // SEND NOTIFICATION
+    await _addNotification(
       employeeId: employeeId,
-      leaveType: leaveType,
-      days: totalDays,
+      title: 'Leave Cancelled',
+      message:
+          '$leaveType $startDateText - $endDateText '
+          '($totalDays day${totalDays == 1 ? '' : 's'}) returned',
+      status: 'cancelled',
     );
-  }
 
-  // 2) either delete or mark as cancelled
-  if (deleteDoc) {
-    await deleteLeaveRequest(docId);
-  } else {
-    await updateLeaveStatus(docId: docId, status: 'cancelled');
-  }
+    print('REQUEST CANCELLED');
 
-  // 3) notify
-  await _addNotification(
-    employeeId: employeeId,
-    title: 'Leave Cancelled',
-    message:
-        '$leaveType $startDateText–$endDateText ($totalDays day${totalDays == 1 ? '' : 's'}) returned',
-    status: 'cancelled',
-  );
+  } catch (e) {
+    print('CANCEL REQUEST ERROR');
+    print(e);
+  }
 }
