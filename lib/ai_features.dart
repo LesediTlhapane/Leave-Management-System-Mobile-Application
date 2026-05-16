@@ -560,6 +560,9 @@ class _SmartLeavePlanningScreenState extends State<SmartLeavePlanningScreen> {
   ];
 
   List<_Suggestion> _suggestions = [];
+  String _plannerAdvice = '';
+  String _plannerMode = 'Balanced';
+  static const _plannerModes = ['Balanced', 'Maximise holidays', 'Short escapes', 'Year-end'];
 
   @override
   void initState() { super.initState(); _build(); }
@@ -638,7 +641,43 @@ class _SmartLeavePlanningScreenState extends State<SmartLeavePlanningScreen> {
     }
 
     result.sort((a, b) => a.start.compareTo(b.start));
-    setState(() => _suggestions = result.take(6).toList());
+    final arranged = _arrangeSuggestionsByMode(result, _plannerMode);
+    _plannerAdvice = _plannerSummary(daysLeft, arranged, _plannerMode);
+    setState(() => _suggestions = arranged.take(6).toList());
+  }
+
+  List<_Suggestion> _arrangeSuggestionsByMode(List<_Suggestion> source, String mode) {
+    if (mode == 'Short escapes') {
+      return source.where((s) => s.need <= 2).toList();
+    }
+    if (mode == 'Maximise holidays') {
+      final copy = List<_Suggestion>.from(source);
+      copy.sort((a, b) => (b.free / b.need).compareTo(a.free / a.need));
+      return copy;
+    }
+    if (mode == 'Year-end') {
+      final filtered = source.where((s) => s.title.contains('Year-end') || s.title.contains('Festive') || s.title.contains('Block')).toList();
+      return filtered.isNotEmpty ? filtered : source;
+    }
+    return source;
+  }
+
+  String _plannerSummary(int daysLeft, List<_Suggestion> suggestions, String mode) {
+    if (daysLeft == 0) {
+      return 'You have no annual leave left today. When your balance renews, use the Smart Leave Planner to target the best public holiday bridge days.';
+    }
+    if (suggestions.isEmpty) {
+      return 'There are no high-value leave windows right now. Save your days for a longer break later in the year or combine them with public holidays when available.';
+    }
+    final next = suggestions.first;
+    final prefix = mode == 'Balanced'
+        ? ''
+        : mode == 'Maximise holidays'
+            ? 'You asked to maximise holiday value. '
+            : mode == 'Short escapes'
+                ? 'You asked for short escapes. '
+                : 'You asked for year-end planning. ';
+    return '${prefix}Your top recommendation is "${next.title}". ${next.tip} With $daysLeft days available, this gives the best balance of leave used versus time off.';
   }
 
   static String _fmt(DateTime d) {
@@ -699,6 +738,59 @@ class _SmartLeavePlanningScreenState extends State<SmartLeavePlanningScreen> {
               ClipRRect(borderRadius: BorderRadius.circular(6), child: LinearProgressIndicator(value: pct, minHeight: 8, backgroundColor: Colors.white.withOpacity(0.15), valueColor: AlwaysStoppedAnimation(barColor))),
             ]),
           ),
+          const SizedBox(height: 20),
+
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: _plannerModes.map((mode) {
+              final selected = _plannerMode == mode;
+              return ChoiceChip(
+                label: Text(mode, style: TextStyle(color: selected ? Colors.white : _navy, fontSize: 12, fontWeight: FontWeight.w600)),
+                selected: selected,
+                selectedColor: _blue,
+                backgroundColor: const Color(0xFFF3F4F6),
+                side: BorderSide(color: selected ? _blue : _border),
+                onSelected: (_) {
+                  if (!selected) {
+                    _plannerMode = mode;
+                    _build();
+                  }
+                },
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 18),
+
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _border),
+              boxShadow: const [BoxShadow(color: Color(0x08000000), blurRadius: 10, offset: Offset(0, 4))],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('AI Planning Summary',
+                    style: TextStyle(color: Color(0xFF111827), fontWeight: FontWeight.w800, fontSize: 14)),
+                const SizedBox(height: 10),
+                Text(_plannerAdvice,
+                    style: const TextStyle(color: Color(0xFF4B5563), fontSize: 13, height: 1.5)),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: _build,
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text('Refresh suggestions'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
           const SizedBox(height: 20),
 
           Row(children: [
@@ -918,7 +1010,15 @@ class _WellbeingScreenState extends State<WellbeingScreen> with TickerProviderSt
     final f2 = recentSick == 0 ? 80.0 : recentSick <= 2 ? 60.0 : 35.0;
 
     final rejected = leaves.where((l) => l.status == 'rejected').length;
-    final pending  = leaves.where((l) => l.status == 'pending').length;
+    final pending  = leaves.where((l) {
+      if (l.status != 'pending') return false;
+      try {
+        final start = DateTime.parse(l.startDate);
+        return !start.isBefore(now);
+      } catch (_) {
+        return false;
+      }
+    }).length;
     final f3 = rejected >= 2 ? 40.0 : pending >= 3 ? 55.0 : 75.0;
 
     DateTime? lastEnd;
@@ -926,6 +1026,7 @@ class _WellbeingScreenState extends State<WellbeingScreen> with TickerProviderSt
       if (l.status != 'approved') continue;
       try {
         final d = DateTime.parse(l.endDate);
+        if (d.isAfter(now)) continue;
         if (lastEnd == null || d.isAfter(lastEnd)) lastEnd = d;
       } catch (_) {}
     }
@@ -933,29 +1034,46 @@ class _WellbeingScreenState extends State<WellbeingScreen> with TickerProviderSt
     final f4 = daysSince < 30 ? 85.0 : daysSince < 90 ? 65.0 : daysSince < 180 ? 45.0 : 25.0;
 
     final score = ((f1 + f2 + f3 + f4) / 4.0).clamp(0.0, 100.0);
-    return _WbResult(score: score, source: 'Behavioural Analysis', tips: _tips(score, unusedRatio, recentSick, daysSince));
+    return _WbResult(score: score, source: 'Behavioural Analysis', tips: _tips(score, unusedRatio: unusedRatio, sick: recentSick, daysSince: daysSince));
   }
 
   _WbResult _combined() {
     final base = _behavioural();
     final answered = _answers.where((a) => a != null).length;
     if (answered == 0) return base;
-    final validAnswers = _answers.where((a) => a != null).map((a) => (a as int) * 20.0).toList();
-    double selfSum = 0.0;
-    for (final v in validAnswers) { selfSum += v; }
-    final self = selfSum / answered;
-    final score = (base.score * 0.4 + self * 0.6).clamp(0.0, 100.0);
-    return _WbResult(score: score, source: 'Self-Reported + Behavioural', tips: _tips(score, 0, 0, 0));
+
+    final mapping = {1: 10.0, 2: 30.0, 3: 55.0, 4: 75.0, 5: 95.0};
+    final selfScore = _answers
+        .where((a) => a != null)
+        .map((a) => mapping[a!]!)
+        .reduce((a, b) => a + b) / answered;
+
+    final score = (base.score * 0.4 + selfScore * 0.6).clamp(0.0, 100.0);
+    return _WbResult(score: score, source: 'Self-Reported + Behavioural', tips: _tips(score, surveyScore: selfScore, unusedRatio: 0, sick: 0, daysSince: 0));
   }
 
-  List<String> _tips(double score, double unusedRatio, int sick, int daysSince) {
+  List<String> _tips(double score, {double surveyScore = -1.0, double unusedRatio = 0.0, int sick = 0, int daysSince = 0}) {
     final t = <String>[];
+    if (surveyScore >= 0) {
+      if (surveyScore <= 25) {
+        t.add('Your check-in responses are very low. Consider taking leave quickly or speaking with HR about workload support.');
+        t.add('If you are feeling exhausted, schedule a wellness day and disconnect from work.');
+      } else if (surveyScore <= 50) {
+        t.add('Your check-in indicates stress. Plan a short break soon and protect your evenings.');
+        t.add('A long weekend or half-day off could help restore energy.');
+      } else if (surveyScore <= 75) {
+        t.add('You are managing, but keep monitoring your balance and book some rest time.');
+      } else {
+        t.add('Nice work — your wellbeing responses are strong. Keep maintaining healthy boundaries and regular breaks.');
+      }
+    }
+
     if (score < 40) {
       t.addAll(['Consider booking leave soon — rest is essential for recovery.', 'Talk to HR about your workload; support is available.', 'Try to disconnect fully during evenings.']);
     } else if (score < 65) {
       t.addAll(['You\'re managing well — keep an eye on your workload.', 'Plan a short break soon to recharge.', 'Stay connected with your team for peer support.']);
     } else {
-      t.addAll(['Great balance! Keep maintaining healthy boundaries.', 'Encourage teammates to also take regular breaks.', 'Keep using your leave — it\'s there for your wellbeing.']);
+      t.addAll(['Great balance! Keep maintaining healthy boundaries.', 'Encourage teammates to take regular breaks.', 'Keep using your leave — it\'s there for your wellbeing.']);
     }
     if (unusedRatio > 0.8) t.add('You still have lots of annual leave — book some time off!');
     if (sick >= 3) t.add('Multiple sick days recently — make sure you\'re fully rested.');
@@ -977,13 +1095,21 @@ class _WellbeingScreenState extends State<WellbeingScreen> with TickerProviderSt
   @override
   Widget build(BuildContext context) {
     final lv = _level(_result.score);
+    final now = DateTime.now();
     final leaves = leavesFor(widget.user.id);
     final approved = leaves.where((l) => l.status == 'approved').length;
-    final pending  = leaves.where((l) => l.status == 'pending').length;
+    final pending = leaves.where((l) {
+      if (l.status != 'pending') return false;
+      try {
+        final start = DateTime.parse(l.startDate);
+        return !start.isBefore(now);
+      } catch (_) {
+        return false;
+      }
+    }).length;
     final balances = getBalances(widget.user.id);
     final annual = balances.firstWhere((b) => b.type.toLowerCase().contains('annual'),
         orElse: () => LeaveBalance(type: 'Annual', policyText: '', allocated: 15, remaining: 0));
-    final now = DateTime.now();
     DateTime? lastEnd;
     for (final l in leaves) {
       if (l.status != 'approved') continue;
@@ -1078,7 +1204,7 @@ class _WellbeingScreenState extends State<WellbeingScreen> with TickerProviderSt
           const SizedBox(height: 12),
           GridView.count(
             shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-            crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, childAspectRatio: 1.5,
+            crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, childAspectRatio: 1.0,
             children: [
               _insightTile('Approved Leaves',    '$approved',  Icons.check_circle_outline,      const Color(0xFF059669)),
               _insightTile('Pending Requests',   '$pending',   Icons.hourglass_empty_rounded,   const Color(0xFFD97706)),
@@ -1160,13 +1286,13 @@ class _WellbeingScreenState extends State<WellbeingScreen> with TickerProviderSt
 
   Widget _insightTile(String label, String value, IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: _border)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Icon(icon, color: color, size: 22),
+        Icon(icon, color: color, size: 20),
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(value, style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.w800)),
-          Text(label, style: const TextStyle(color: _muted, fontSize: 11, height: 1.3)),
+          Text(value, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w800)),
+          Text(label, style: const TextStyle(color: _muted, fontSize: 10, height: 1.3)),
         ]),
       ]),
     );
